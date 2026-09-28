@@ -2,7 +2,7 @@
 
 Minimal control plane for teams of AI agents, modeled on [paperclip](../paperclip). Backend only. Agents run through the [`pi`](https://github.com/badlogic/pi-mono) harness.
 
-Node 24 LTS runs the TypeScript directly (type stripping). Storage is the built-in `node:sqlite`. There are no runtime dependencies.
+Node 24.19+ runs the TypeScript directly (type stripping) and imports `.sql` files as text (`--experimental-import-text`). Storage is the built-in `node:sqlite`. There are no runtime dependencies.
 
 ```sh
 npm install      # dev deps only: typescript, @types/node

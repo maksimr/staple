@@ -4,6 +4,17 @@ import { createWriteStream, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { DATA_DIR, all, issueContext, one, run, type Row } from "./db.ts";
+import agentReports from "./sql/agents/reports.sql" with { type: "text" };
+import getAgent from "./sql/agents/get.sql" with { type: "text" };
+import getCompany from "./sql/companies/get.sql" with { type: "text" };
+import projectForIssue from "./sql/projects/for-issue.sql" with { type: "text" };
+import cancelRun from "./sql/runs/cancel.sql" with { type: "text" };
+import finishRun from "./sql/runs/finish.sql" with { type: "text" };
+import insertRun from "./sql/runs/insert.sql" with { type: "text" };
+import queuedRun from "./sql/runs/queued.sql" with { type: "text" };
+import readyRuns from "./sql/runs/ready.sql" with { type: "text" };
+import recoverRuns from "./sql/runs/recover.sql" with { type: "text" };
+import startRun from "./sql/runs/start.sql" with { type: "text" };
 
 const PI_BIN = process.env.PI_BIN ?? "pi";
 const PI_ARGS = process.env.PI_ARGS?.split(" ").filter(Boolean) ?? []; // e.g. "--yolo" or "--no-skills"
@@ -13,23 +24,14 @@ const procs = new Map<string, ChildProcess>();
 /** Queue a heartbeat for an agent. Pending wakes for the same agent+issue coalesce into one run. */
 export function wake(agentId: string, issueId: string | null, reason: string, actorAgentId?: string) {
   if (agentId === actorAgentId) return; // an agent's own actions never wake itself
-  const queued = one("select 1 from runs where agentId = ? and issueId is ? and status = 'queued'", agentId, issueId);
-  if (!queued) {
-    run(
-      "insert into runs (id, companyId, agentId, issueId, reason) select ?, companyId, id, ?, ? from agents where id = ?",
-      randomUUID(), issueId, reason, agentId,
-    );
-  }
+  const queued = one(queuedRun, { agentId, issueId });
+  if (!queued) run(insertRun, { id: randomUUID(), issueId, reason, agentId });
   tick();
 }
 
 /** Start queued runs: one live run per agent, paused agents wait. */
 export function tick() {
-  const ready = all(`
-    select r.* from runs r join agents a on a.id = r.agentId
-    where r.status = 'queued' and a.status = 'active'
-      and not exists (select 1 from runs x where x.agentId = r.agentId and x.status = 'running')
-    order by r.rowid`);
+  const ready = all(readyRuns);
   const started = new Set<string>();
   for (const r of ready) {
     if (started.has(r.agentId)) continue;
@@ -39,22 +41,22 @@ export function tick() {
 }
 
 export function cancel(runId: string) {
-  run("update runs set status = 'cancelled', finishedAt = current_timestamp where id = ? and status in ('queued', 'running')", runId);
+  run(cancelRun, { id: runId });
   procs.get(runId)?.kill();
 }
 
 /** Runs that were live when the server died can't be resumed; fail them and move on. */
 export function recover() {
-  run("update runs set status = 'failed', summary = 'server restarted', finishedAt = current_timestamp where status = 'running'");
+  run(recoverRuns);
   tick();
 }
 
 function start(r: Row) {
   const token = randomBytes(32).toString("hex");
-  run("update runs set status = 'running', token = ?, startedAt = current_timestamp where id = ?", token, r.id);
-  const agent = one("select * from agents where id = ?", r.agentId)!;
-  const company = one("select * from companies where id = ?", r.companyId)!;
-  const project = one("select p.* from projects p join issues i on i.projectId = p.id where i.id = ?", r.issueId);
+  run(startRun, { id: r.id, token });
+  const agent = one(getAgent, { id: r.agentId })!;
+  const company = one(getCompany, { id: r.companyId })!;
+  const project = one(projectForIssue, { issueId: r.issueId });
   const cwd = project?.cwd ?? company.cwd ?? join(DATA_DIR, "workspaces", company.id);
   const session = join(DATA_DIR, "sessions", agent.id, `${r.issueId ?? "inbox"}.jsonl`); // continuity per agent+issue
   const logPath = join(DATA_DIR, "runs", `${r.id}.log`);
@@ -105,17 +107,17 @@ function start(r: Row) {
       : (last?.content ?? []).filter((c: Row) => c.type === "text").map((c: Row) => c.text).join("");
     // pi exits 0 even when the provider failed; the last message carries the error.
     const ok = code === 0 && last?.stopReason !== "error";
-    run(
-      "update runs set status = ?, exitCode = ?, summary = ?, finishedAt = current_timestamp where id = ? and status = 'running'",
-      ok ? "succeeded" : "failed", code, last?.errorMessage || text || (signal ? `killed by ${signal}` : null), r.id,
-    );
+    run(finishRun, {
+      id: r.id, status: ok ? "succeeded" : "failed", exitCode: code,
+      summary: last?.errorMessage || text || (signal ? `killed by ${signal}` : null),
+    });
     tick();
   });
 }
 
 function systemPrompt(agent: Row, company: Row) {
-  const boss = agent.reportsTo ? one("select id, name, role from agents where id = ?", agent.reportsTo) : undefined;
-  const reports = all("select id, name, role from agents where reportsTo = ?", agent.id);
+  const boss = agent.reportsTo ? one(getAgent, { id: agent.reportsTo }) : undefined;
+  const reports = all(agentReports, { id: agent.id });
   const who = (a: Row) => `${a.name} (${a.role ? `${a.role}, ` : ""}id ${a.id})`;
   return `
 # staple

@@ -20,7 +20,8 @@ Read [runs.md](runs.md) before changing anything that calls `wake()`. Every wake
 
 | File | Contents |
 |---|---|
-| `src/db.ts` | Schema, `one`/`all`/`run` query helpers, `RUN_COLS`, `issueContext()` |
+| `src/db.ts` | `one`/`all`/`run` helpers that take imported SQL and a `$param` object, `issueContext()` |
+| `src/sql/` | `schema.sql`, plus one file per statement grouped by table, e.g. `issues/get.sql` |
 | `src/server.ts` | HTTP routes, auth (`actorOf`, `scoped`, `boardOnly`, `inCompany`), wake rules (`notify`, `comment`), startup |
 | `src/orchestrator.ts` | Run queue (`wake`, `tick`, `cancel`, `recover`), pi spawn (`start`), prompts (`systemPrompt`, `wakePrompt`) |
 | `test/orchestration.test.ts` | End-to-end test with a real server and a fake pi |
@@ -67,7 +68,7 @@ $DATA_DIR/
 
 - Node 24 runs `.ts` files directly by stripping types. `tsconfig.json` sets `erasableSyntaxOnly`, so `enum`, `namespace` and constructor parameter properties won't run. Import local files with the `.ts` extension.
 - No runtime dependencies. Use `node:*` modules. The only dev dependencies are `typescript` and `@types/node`.
-- SQL is inline. Columns are camelCase, ids come from `randomUUID()`, timestamps are SQLite `current_timestamp` (UTC, `YYYY-MM-DD HH:MM:SS`).
+- SQL lives in `src/sql/`, one statement per file with `$name` placeholders. Import it where it runs: `import getIssue from "./sql/issues/get.sql" with { type: "text" }`, then `one(getIssue, { id })`. Text imports need Node 24.19+ and `--experimental-import-text`, which the npm scripts and the shebang pass. Columns are camelCase, ids come from `randomUUID()`, timestamps are SQLite `current_timestamp` (UTC, `YYYY-MM-DD HH:MM:SS`).
 - Route handlers return rows and the server JSON-encodes them. Errors go through `fail(status, message)`.
 - A `// ponytail:` comment marks a known shortcut and names its limit. Update it when you change the code around it.
 - staple copies ideas from paperclip (`../paperclip`) and only builds what a task needs.
@@ -92,7 +93,7 @@ The API is written down in four places, one per reader. When you add or change a
 
 ## Schema changes have no migrations
 
-`db.ts` runs `create table if not exists` at startup. A new column or a changed `check` constraint never reaches an existing `db.sqlite`. In development, delete `$DATA_DIR/db.sqlite`. To keep data, add an `alter table ... add column` that skips when the column exists. SQLite can't alter a `check` constraint, so changing one on a live database means rebuilding the table.
+`db.ts` runs `src/sql/schema.sql` (`create table if not exists`) at startup. A new column or a changed `check` constraint never reaches an existing `db.sqlite`. In development, delete `$DATA_DIR/db.sqlite`. To keep data, add an `alter table ... add column` that skips when the column exists. SQLite can't alter a `check` constraint, so changing one on a live database means rebuilding the table.
 
 ## Not built
 

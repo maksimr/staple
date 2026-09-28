@@ -6,7 +6,7 @@ This page follows an event from an API call to a finished pi process. The code i
 
 A run is one heartbeat: one pi process for one agent, usually on one issue.
 
-Table `runs` in `src/db.ts`.
+Table `runs` in `src/sql/schema.sql`.
 
 | Column | Meaning |
 |---|---|

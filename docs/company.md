@@ -4,7 +4,7 @@ A company is the top-level tenant. Every agent, project, issue and run belongs t
 
 ## Fields
 
-Table `companies` in `src/db.ts`.
+Table `companies` in `src/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -50,18 +50,17 @@ The board has no company, so these checks never block it.
 
 Add a company field:
 
-1. Add the column to `companies` in `src/db.ts`. Read [index.md](index.md#schema-changes-have-no-migrations) first.
-2. Insert it in `POST /api/companies` in `src/server.ts`.
+1. Add the column to `companies` in `src/sql/schema.sql`. Read [index.md](index.md#schema-changes-have-no-migrations) first.
+2. Insert it in `src/sql/companies/insert.sql` and `POST /api/companies` in `src/server.ts`.
 3. If agents need it, print it in `systemPrompt()` in `src/orchestrator.ts`.
 4. Update the API tables ([index.md](index.md#keep-the-api-docs-in-sync)).
 
-Add `PATCH /api/companies/:id`. `update()` accepts only `"agents" | "issues"`, so widen its table type first.
+Add `PATCH /api/companies/:id`. Add `src/sql/companies/update.sql` (`update companies set name = $name, description = $description, cwd = $cwd where id = $id`) and import it as `updateCompany` in `src/server.ts`.
 
 ```ts
 ["PATCH", /^\/api\/companies\/([^/]+)$/, ({ a, p, body }) => {
   boardOnly(a);
-  company(a, p[0]);
-  update("companies", p[0], body, ["name", "description", "cwd"]);
+  update(updateCompany, company(a, p[0]), body, ["name", "description", "cwd"]);
   return get("companies", p[0]);
 }],
 ```

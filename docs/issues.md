@@ -4,7 +4,7 @@ An issue is a unit of work with at most one assignee. Agents coordinate only thr
 
 ## Fields
 
-Table `issues` in `src/db.ts`.
+Table `issues` in `src/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -74,7 +74,7 @@ Send `"assigneeAgentId": null` to unassign. Every referenced id must be in the i
 
 ## Extending
 
-- A new status needs four edits. Change the `check` in `src/db.ts` (existing databases need a table rebuild, see [index.md](index.md#schema-changes-have-no-migrations)). Decide which lists in `src/server.ts` include it: `actionable` and the outcome list in `notify()`, the closed list in `comment()`. Update the status line in `systemPrompt()`. Update `SKILL.md` and `README.md`.
+- A new status needs four edits. Change the `check` in `src/sql/schema.sql` (existing databases need a table rebuild, see [index.md](index.md#schema-changes-have-no-migrations)). Decide which lists in `src/server.ts` include it: `actionable` and the outcome list in `notify()`, the closed list in `comment()`. Update the status line in `systemPrompt()`. Update `SKILL.md` and `README.md`.
 - A new wake rule goes in `notify()` or `comment()`. Pass `a.agentId` as the actor so an agent never wakes itself. The reason is free text that the agent reads as `Wake reason: ...`, so name it in words a model understands.
-- A new issue field needs the column, the insert in `POST`, and the column list in `PATCH`. `issueContext()` selects `*`, so agents see it without further changes. Add it to the `POST` and `PATCH` lines in `systemPrompt()` if agents should set it.
+- A new issue field needs the column, `src/sql/issues/insert.sql` plus the insert in `POST`, and `src/sql/issues/update.sql` plus the column list in `PATCH`. `issueContext()` selects `*`, so agents see it without further changes. Add it to the `POST` and `PATCH` lines in `systemPrompt()` if agents should set it.
 - Atomic checkout isn't built. Reassigning an issue while its old assignee is mid-run leaves two agents working on it until the first run ends.

@@ -1,9 +1,28 @@
-#!/usr/bin/env -S node --disable-warning=ExperimentalWarning
+#!/usr/bin/env -S node --disable-warning=ExperimentalWarning --experimental-import-text
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { RUN_COLS, all, issueContext, one, run, type Row } from "./db.ts";
+import { all, issueContext, one, run, type Row } from "./db.ts";
 import { cancel, recover, tick, wake } from "./orchestrator.ts";
+import getAgent from "./sql/agents/get.sql" with { type: "text" };
+import insertAgent from "./sql/agents/insert.sql" with { type: "text" };
+import listAgents from "./sql/agents/list.sql" with { type: "text" };
+import updateAgent from "./sql/agents/update.sql" with { type: "text" };
+import getComment from "./sql/comments/get.sql" with { type: "text" };
+import insertComment from "./sql/comments/insert.sql" with { type: "text" };
+import getCompany from "./sql/companies/get.sql" with { type: "text" };
+import insertCompany from "./sql/companies/insert.sql" with { type: "text" };
+import listCompanies from "./sql/companies/list.sql" with { type: "text" };
+import getIssue from "./sql/issues/get.sql" with { type: "text" };
+import insertIssue from "./sql/issues/insert.sql" with { type: "text" };
+import listIssues from "./sql/issues/list.sql" with { type: "text" };
+import updateIssue from "./sql/issues/update.sql" with { type: "text" };
+import getProject from "./sql/projects/get.sql" with { type: "text" };
+import insertProject from "./sql/projects/insert.sql" with { type: "text" };
+import listProjects from "./sql/projects/list.sql" with { type: "text" };
+import runActor from "./sql/runs/actor.sql" with { type: "text" };
+import getRun from "./sql/runs/get.sql" with { type: "text" };
+import listRuns from "./sql/runs/list.sql" with { type: "text" };
 
 /** Board = no token (local trusted, like paperclip's local_trusted mode). Agent = live run token. */
 type Actor = { agentId?: string; companyId?: string };
@@ -13,13 +32,13 @@ const fail = (status: number, message: string): never => {
   throw Object.assign(new Error(message), { status });
 };
 const need = (v: unknown, name: string) => (typeof v === "string" && v.trim() ? v : fail(422, `${name} is required`));
-const get = (table: "companies" | "agents" | "projects" | "issues", id: string) => one(`select * from ${table} where id = ?`, id);
-const getRun = (id: string) => one(`select ${RUN_COLS} from runs where id = ?`, id);
+const byId = { companies: getCompany, agents: getAgent, projects: getProject, issues: getIssue };
+const get = (table: keyof typeof byId, id: string) => one(byId[table], { id });
 
 function actorOf(req: IncomingMessage): Actor {
   const token = req.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
   if (!token) return {};
-  return one("select agentId, companyId from runs where token = ? and status = 'running'", token) ?? fail(401, "invalid or expired token");
+  return one(runActor, { token }) ?? fail(401, "invalid or expired token");
 }
 
 /** 404 if missing, 403 if an agent reaches outside its company. */
@@ -32,24 +51,24 @@ const company = (a: Actor, id: string) => scoped(a, get("companies", id), id);
 const boardOnly = (a: Actor) => a.agentId && fail(403, "board only");
 
 function inCompany(companyId: string, table: "agents" | "projects" | "issues", id: unknown) {
-  if (id != null && !one(`select 1 from ${table} where id = ? and companyId = ?`, id as string, companyId)) {
+  if (id != null && get(table, id as string)?.companyId !== companyId) {
     fail(422, `${table} ${id} not found in company`);
   }
 }
 
-function update(table: "agents" | "issues", id: string, body: Row, cols: string[]) {
-  const keys = cols.filter((k) => k in body);
-  if (keys.length) run(`update ${table} set ${keys.map((k) => `${k} = ?`).join(", ")} where id = ?`, ...keys.map((k) => body[k]), id);
+/** `cols` must match the `$params` in `sql`; unset ones would bind null. */
+function update(sql: string, row: Row, body: Row, cols: string[]) {
+  run(sql, { id: row.id, ...Object.fromEntries(cols.map((k) => [k, k in body ? body[k] : row[k]])) });
 }
 
 function comment(a: Actor, issue: Row, body: string) {
   const id = randomUUID();
-  run("insert into comments (id, issueId, authorAgentId, body) values (?, ?, ?, ?)", id, issue.id, a.agentId ?? null, body);
+  run(insertComment, { id, issueId: issue.id, authorAgentId: a.agentId ?? null, body });
   // Agent chatter on closed issues stays inert; the board can always reopen a conversation.
   if (issue.assigneeAgentId && (!a.agentId || !["done", "cancelled"].includes(issue.status))) {
     wake(issue.assigneeAgentId, issue.id, "issue_commented", a.agentId);
   }
-  return one("select * from comments where id = ?", id);
+  return one(getComment, { id });
 }
 
 /** Orchestration rules: wake the assignee on new actionable work, wake the parent's assignee on child outcomes. */
@@ -70,11 +89,11 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
   ["POST", /^\/api\/companies$/, ({ a, body }) => {
     boardOnly(a);
     const id = randomUUID();
-    run("insert into companies (id, name, description, cwd) values (?, ?, ?, ?)", id, need(body.name, "name"), body.description ?? "", body.cwd ?? null);
+    run(insertCompany, { id, name: need(body.name, "name"), description: body.description ?? "", cwd: body.cwd ?? null });
     return get("companies", id);
   }],
   ["GET", /^\/api\/companies$/, ({ a }) =>
-    a.companyId ? all("select * from companies where id = ?", a.companyId) : all("select * from companies order by rowid")],
+    a.companyId ? [get("companies", a.companyId)] : all(listCompanies)],
   ["GET", /^\/api\/companies\/([^/]+)$/, ({ a, p }) => company(a, p[0])],
 
   ["POST", /^\/api\/companies\/([^/]+)\/agents$/, ({ a, p, body }) => {
@@ -82,15 +101,15 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
     company(a, p[0]);
     inCompany(p[0], "agents", body.reportsTo);
     const id = randomUUID();
-    run(
-      "insert into agents (id, companyId, name, role, reportsTo, instructions, model, thinking) values (?, ?, ?, ?, ?, ?, ?, ?)",
-      id, p[0], need(body.name, "name"), body.role ?? "", body.reportsTo ?? null, body.instructions ?? "", body.model ?? null, body.thinking ?? null,
-    );
+    run(insertAgent, {
+      id, companyId: p[0], name: need(body.name, "name"), role: body.role ?? "", reportsTo: body.reportsTo ?? null,
+      instructions: body.instructions ?? "", model: body.model ?? null, thinking: body.thinking ?? null,
+    });
     return get("agents", id);
   }],
   ["GET", /^\/api\/companies\/([^/]+)\/agents$/, ({ a, p }) => {
     company(a, p[0]);
-    return all("select * from agents where companyId = ? order by rowid", p[0]);
+    return all(listAgents, { companyId: p[0] });
   }],
   ["GET", /^\/api\/agents\/me$/, ({ a }) => get("agents", a.agentId ?? fail(400, "not an agent"))],
   ["GET", /^\/api\/agents\/([^/]+)$/, ({ a, p }) => scoped(a, get("agents", p[0]))],
@@ -98,7 +117,7 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
     boardOnly(a);
     const agent = scoped(a, get("agents", p[0]));
     inCompany(agent.companyId, "agents", body.reportsTo);
-    update("agents", agent.id, body, ["name", "role", "reportsTo", "instructions", "model", "thinking", "status"]);
+    update(updateAgent, agent, body, ["name", "role", "reportsTo", "instructions", "model", "thinking", "status"]);
     tick(); // resuming a paused agent releases its queued runs
     return get("agents", agent.id);
   }],
@@ -113,15 +132,12 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
     boardOnly(a);
     company(a, p[0]);
     const id = randomUUID();
-    run(
-      "insert into projects (id, companyId, name, description, cwd) values (?, ?, ?, ?, ?)",
-      id, p[0], need(body.name, "name"), body.description ?? "", body.cwd ?? null,
-    );
+    run(insertProject, { id, companyId: p[0], name: need(body.name, "name"), description: body.description ?? "", cwd: body.cwd ?? null });
     return get("projects", id);
   }],
   ["GET", /^\/api\/companies\/([^/]+)\/projects$/, ({ a, p }) => {
     company(a, p[0]);
-    return all("select * from projects where companyId = ? order by rowid", p[0]);
+    return all(listProjects, { companyId: p[0] });
   }],
   ["GET", /^\/api\/projects\/([^/]+)$/, ({ a, p }) => scoped(a, get("projects", p[0]))],
 
@@ -133,25 +149,20 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
     // Child issues stay in the parent's project unless told otherwise.
     const projectId = body.projectId ?? (body.parentId && get("issues", body.parentId)?.projectId) ?? null;
     const id = randomUUID();
-    run(
-      "insert into issues (id, companyId, parentId, projectId, title, description, status, assigneeAgentId, createdByAgentId) values (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      id, p[0], body.parentId ?? null, projectId, need(body.title, "title"), body.description ?? "", body.status ?? "todo",
-      body.assigneeAgentId ?? null, a.agentId ?? null,
-    );
+    run(insertIssue, {
+      id, companyId: p[0], parentId: body.parentId ?? null, projectId, title: need(body.title, "title"), description: body.description ?? "",
+      status: body.status ?? "todo", assigneeAgentId: body.assigneeAgentId ?? null, createdByAgentId: a.agentId ?? null,
+    });
     const issue = get("issues", id)!;
     notify(a, undefined, issue);
     return issue;
   }],
   ["GET", /^\/api\/companies\/([^/]+)\/issues$/, ({ a, p, q }) => {
     company(a, p[0]);
-    return all(
-      `select * from issues where companyId = ?1
-         and (?2 is null or assigneeAgentId = ?2)
-         and (?3 is null or status in (select value from json_each(?3)))
-         and (?4 is null or projectId = ?4)
-       order by rowid`,
-      p[0], q.get("assigneeAgentId"), q.has("status") ? JSON.stringify(q.get("status")!.split(",")) : null, q.get("projectId"),
-    );
+    return all(listIssues, {
+      companyId: p[0], assigneeAgentId: q.get("assigneeAgentId"), projectId: q.get("projectId"),
+      statuses: q.has("status") ? JSON.stringify(q.get("status")!.split(",")) : null,
+    });
   }],
   ["GET", /^\/api\/issues\/([^/]+)$/, ({ a, p }) => scoped(a, issueContext(p[0]))],
   ["PATCH", /^\/api\/issues\/([^/]+)$/, ({ a, p, body }) => {
@@ -159,7 +170,7 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
     inCompany(before.companyId, "agents", body.assigneeAgentId);
     inCompany(before.companyId, "issues", body.parentId);
     inCompany(before.companyId, "projects", body.projectId);
-    update("issues", before.id, body, ["title", "description", "status", "assigneeAgentId", "parentId", "projectId"]);
+    update(updateIssue, before, body, ["title", "description", "status", "assigneeAgentId", "parentId", "projectId"]);
     const after = get("issues", before.id)!;
     if (body.comment) comment(a, after, need(body.comment, "comment"));
     notify(a, before, after);
@@ -170,13 +181,13 @@ const routes: [string, RegExp, (c: Ctx) => unknown][] = [
 
   ["GET", /^\/api\/companies\/([^/]+)\/runs$/, ({ a, p }) => {
     company(a, p[0]);
-    return all(`select ${RUN_COLS} from runs where companyId = ? order by rowid desc limit 100`, p[0]);
+    return all(listRuns, { companyId: p[0] });
   }],
-  ["GET", /^\/api\/runs\/([^/]+)$/, ({ a, p }) => scoped(a, getRun(p[0]))],
+  ["GET", /^\/api\/runs\/([^/]+)$/, ({ a, p }) => scoped(a, one(getRun, { id: p[0] }))],
   ["POST", /^\/api\/runs\/([^/]+)\/cancel$/, ({ a, p }) => {
     boardOnly(a);
-    cancel(scoped(a, getRun(p[0])).id);
-    return getRun(p[0]);
+    cancel(scoped(a, one(getRun, { id: p[0] })).id);
+    return one(getRun, { id: p[0] });
   }],
 ];
 

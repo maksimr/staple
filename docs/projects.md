@@ -4,7 +4,7 @@ A project groups a company's issues and pins their runs to a working directory. 
 
 ## Fields
 
-Table `projects` in `src/db.ts`.
+Table `projects` in `src/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
