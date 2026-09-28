@@ -1,12 +1,12 @@
 # Runs
 
-This page follows an event from an API call to a finished pi process. The code is `src/orchestrator.ts`.
+This page follows an event from an API call to a finished pi process. The code is `src/core/orchestrator.ts`.
 
 ## Fields
 
 A run is one heartbeat: one pi process for one agent, usually on one issue.
 
-Table `runs` in `src/sql/schema.sql`.
+Table `runs` in `src/db/sql/schema.sql`.
 
 | Column | Meaning |
 |---|---|

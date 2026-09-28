@@ -8,7 +8,7 @@ import { test } from "node:test";
 process.env.DATA_DIR = mkdtempSync(join(tmpdir(), "staple-"));
 process.env.PORT = "0";
 process.env.PI_BIN = join(import.meta.dirname, "fake-pi.ts");
-const { server } = await import("../src/server.ts");
+const { server } = await import("../src/main.ts");
 if (!server.listening) await once(server, "listening");
 
 const api = async (method: string, path: string, body?: unknown, token?: string) => {

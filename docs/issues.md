@@ -4,7 +4,7 @@ An issue is a unit of work with at most one assignee. Agents coordinate only thr
 
 ## Fields
 
-Table `issues` in `src/sql/schema.sql`.
+Table `issues` in `src/db/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -36,7 +36,7 @@ A `check` constraint enforces the set, and a bad value returns 400. staple doesn
 
 ## Wake rules
 
-These live in `src/server.ts`. `notify(actor, before, after)` runs after an issue is created or patched. `comment()` runs for `POST /comments` and for a `PATCH` with a `comment` field.
+These live in `src/core/orchestrator.ts`. The server calls `issueChanged(before, after, actorAgentId)` after an issue is created or patched, and `commented(issue, actorAgentId)` after `comment()` in `src/server/http.ts` stores a comment, for `POST /comments` and for a `PATCH` with a `comment` field.
 
 1. `issue_assigned`. The issue has an assignee, is now `todo` or `in_progress`, and either the assignee changed or the issue wasn't actionable before. This covers create, reassign, reopen (`done` to `todo`) and unpark (`backlog` to `todo`).
 2. `child_<status>`, e.g. `child_done`. The issue has a parent, its status changed, and the new status is `done`, `blocked`, `cancelled` or `in_review`. The parent's assignee wakes on the parent issue.
@@ -45,7 +45,7 @@ These live in `src/server.ts`. `notify(actor, before, after)` runs after an issu
 
 `wake()` drops a wake when the target is the caller. An agent that assigns itself an issue, comments on its own issue, or closes a child of an issue it owns starts no run for itself.
 
-A `PATCH` that changes the issue and adds a comment calls `comment()` first, then `notify()`. When both wake the same agent, they merge into one queued run that keeps the first reason, `issue_commented` ([runs.md](runs.md#coalescing)).
+A `PATCH` that changes the issue and adds a comment calls `commented()` first, then `issueChanged()`. When both wake the same agent, they merge into one queued run that keeps the first reason, `issue_commented` ([runs.md](runs.md#coalescing)).
 
 ## Delegation loop
 
@@ -58,7 +58,7 @@ The system prompt teaches this loop, and `test/orchestration.test.ts` runs it en
 
 ## Issue context
 
-`GET /api/issues/:id` returns `issueContext(id)` from `src/db.ts`: the issue row plus `project` (row or `null`), `comments` (the whole thread) and `children` (`id`, `title`, `status`, `assigneeAgentId`). The wake prompt embeds the same JSON, so anything you add to `issueContext()` goes to every agent on every wake. The full thread is sent every time. The `ponytail:` comment there marks that as the first thing to page when threads get long.
+`GET /api/issues/:id` returns `store.issueContext(id)` from `src/db/sqlite.ts`: the issue row plus `project` (row or `null`), `comments` (the whole thread) and `children` (`id`, `title`, `status`, `assigneeAgentId`). The wake prompt embeds the same JSON, so anything you add to `issueContext()` goes to every agent on every wake. The full thread is sent every time. The `ponytail:` comment there marks that as the first thing to page when threads get long.
 
 ## API
 
@@ -74,7 +74,7 @@ Send `"assigneeAgentId": null` to unassign. Every referenced id must be in the i
 
 ## Extending
 
-- A new status needs four edits. Change the `check` in `src/sql/schema.sql` (existing databases need a table rebuild, see [index.md](index.md#schema-changes-have-no-migrations)). Decide which lists in `src/server.ts` include it: `actionable` and the outcome list in `notify()`, the closed list in `comment()`. Update the status line in `systemPrompt()`. Update `SKILL.md` and `README.md`.
-- A new wake rule goes in `notify()` or `comment()`. Pass `a.agentId` as the actor so an agent never wakes itself. The reason is free text that the agent reads as `Wake reason: ...`, so name it in words a model understands.
-- A new issue field needs the column, `src/sql/issues/insert.sql` plus the insert in `POST`, and `src/sql/issues/update.sql` plus the column list in `PATCH`. `issueContext()` selects `*`, so agents see it without further changes. Add it to the `POST` and `PATCH` lines in `systemPrompt()` if agents should set it.
+- A new status needs four edits. Change the `check` in `src/db/sql/schema.sql` (existing databases need a table rebuild, see [index.md](index.md#schema-changes-have-no-migrations)). Decide which lists in `src/core/orchestrator.ts` include it: `actionable` and the outcome list in `issueChanged()`, the closed list in `commented()`. Update the status line in `systemPrompt()`. Update `SKILL.md` and `README.md`.
+- A new wake rule goes in `issueChanged()` or `commented()`. Pass the actor's agent id through so an agent never wakes itself. The reason is free text that the agent reads as `Wake reason: ...`, so name it in words a model understands.
+- A new issue field needs the column, the field on `Issue` in `src/core/types.ts`, `src/db/sql/issues/insert.sql` plus the insert in `POST`, and `src/db/sql/issues/update.sql` plus the column list in `PATCH`. `issueContext()` selects `*`, so agents see it without further changes. Add it to the `POST` and `PATCH` lines in `systemPrompt()` if agents should set it.
 - Atomic checkout isn't built. Reassigning an issue while its old assignee is mid-run leaves two agents working on it until the first run ends.

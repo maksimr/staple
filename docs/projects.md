@@ -4,7 +4,7 @@ A project groups a company's issues and pins their runs to a working directory. 
 
 ## Fields
 
-Table `projects` in `src/sql/schema.sql`.
+Table `projects` in `src/db/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -17,11 +17,11 @@ Table `projects` in `src/sql/schema.sql`.
 
 ## Effect on runs
 
-`start()` in `src/orchestrator.ts` finds the project through the run's issue (`issues.projectId`). If that project has a `cwd`, pi starts there. Otherwise the company's workspace applies ([company.md](company.md#workspace)).
+`start()` in `src/core/orchestrator.ts` finds the project through the run's issue (`issues.projectId`). If that project has a `cwd`, pi starts there. Otherwise the company's workspace applies ([company.md](company.md#workspace)).
 
 A run with no issue, such as a manual wake without `issueId`, never uses a project `cwd`.
 
-The system prompt doesn't mention projects. Agents learn about the project from `issue.project` in the wake prompt, which `issueContext()` in `src/db.ts` attaches, and they can list projects with `GET /api/companies/:id/projects`.
+The system prompt doesn't mention projects. Agents learn about the project from `issue.project` in the wake prompt, which `issueContext()` in `src/db/sqlite.ts` attaches, and they can list projects with `GET /api/companies/:id/projects`.
 
 ## Inheritance
 

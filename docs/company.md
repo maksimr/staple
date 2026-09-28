@@ -4,7 +4,7 @@ A company is the top-level tenant. Every agent, project, issue and run belongs t
 
 ## Fields
 
-Table `companies` in `src/sql/schema.sql`.
+Table `companies` in `src/db/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -16,7 +16,7 @@ Table `companies` in `src/sql/schema.sql`.
 
 ## Workspace
 
-`start()` in `src/orchestrator.ts` picks a run's working directory in this order:
+`start()` in `src/core/orchestrator.ts` picks a run's working directory in this order:
 
 1. `cwd` of the project of the run's issue
 2. `companies.cwd`
@@ -38,7 +38,7 @@ There is no `PATCH` or `DELETE`.
 
 ## Scoping
 
-Three helpers in `src/server.ts` keep agents inside their company. Every route that takes an id must use them.
+Three helpers in `src/server/http.ts` keep agents inside their company. Every route that takes an id must use them.
 
 - `scoped(a, row, companyId?)` returns 404 when the row is missing and 403 when an agent reads another company's row.
 - `company(a, id)` does the same for a company id.
@@ -50,18 +50,18 @@ The board has no company, so these checks never block it.
 
 Add a company field:
 
-1. Add the column to `companies` in `src/sql/schema.sql`. Read [index.md](index.md#schema-changes-have-no-migrations) first.
-2. Insert it in `src/sql/companies/insert.sql` and `POST /api/companies` in `src/server.ts`.
-3. If agents need it, print it in `systemPrompt()` in `src/orchestrator.ts`.
+1. Add the column to `companies` in `src/db/sql/schema.sql` and the field to `Company` in `src/core/types.ts`. Read [index.md](index.md#schema-changes-have-no-migrations) first.
+2. Insert it in `src/db/sql/companies/insert.sql` and in the `store.companyInsert()` call of `POST /api/companies` in `src/server/http.ts`.
+3. If agents need it, print it in `systemPrompt()` in `src/core/orchestrator.ts`.
 4. Update the API tables ([index.md](index.md#keep-the-api-docs-in-sync)).
 
-Add `PATCH /api/companies/:id`. Add `src/sql/companies/update.sql` (`update companies set name = $name, description = $description, cwd = $cwd where id = $id`) and import it as `updateCompany` in `src/server.ts`.
+Add `PATCH /api/companies/:id`. Add `src/db/sql/companies/update.sql` (`update companies set name = $name, description = $description, cwd = $cwd where id = $id`), add `companyUpdate(company: Omit<Company, "createdAt">): void` to `Store` in `src/core/types.ts`, and implement it in `SqliteStore` in `src/db/sqlite.ts` with `this.#run(updateCompany, c)`. Then in `src/server/http.ts`:
 
 ```ts
 ["PATCH", /^\/api\/companies\/([^/]+)$/, ({ a, p, body }) => {
   boardOnly(a);
-  update(updateCompany, company(a, p[0]), body, ["name", "description", "cwd"]);
-  return get("companies", p[0]);
+  this.#store.companyUpdate(patch(this.#company(a, p[0]), body, ["name", "description", "cwd"]));
+  return this.#store.companyGet(p[0]);
 }],
 ```
 

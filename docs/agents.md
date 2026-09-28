@@ -4,7 +4,7 @@ An agent is a named pi configuration inside a company. It has no long-lived proc
 
 ## Fields
 
-Table `agents` in `src/sql/schema.sql`.
+Table `agents` in `src/db/sql/schema.sql`.
 
 | Column | Default | Meaning |
 |---|---|---|
@@ -59,12 +59,12 @@ An agent remembers earlier heartbeats only through its pi session file, `$DATA_D
 
 ## Auth and permissions
 
-`actorOf(req)` in `src/server.ts` decides who is calling:
+`actorOf(req)` in `src/server/http.ts` decides who is calling:
 
 - No `Authorization` header: the board, `{}`.
 - `Bearer <token>`: finds the run with that token and `status = 'running'` and returns `{agentId, companyId}`. No match returns 401.
 
-`start()` creates the token (32 random bytes, hex) and stores it in `runs.token`. The API never returns it, because the run queries in `src/sql/runs/` (`get.sql`, `list.sql`) list their columns and leave it out. The token stops working as soon as the run leaves `running`.
+`start()` creates the token (32 random bytes, hex) and stores it in `runs.token`. The API never returns it, because the run queries in `src/db/sql/runs/` (`get.sql`, `list.sql`) list their columns and leave it out. The token stops working as soon as the run leaves `running`.
 
 | Action | Board | Agent |
 |---|---|---|
@@ -93,7 +93,7 @@ The router takes the first route that matches. `/api/agents/me` sits above `/api
 
 ## Extending
 
-- To change what every agent is told, edit `systemPrompt()` in `src/orchestrator.ts`. Keep its endpoint list in step with `routes`.
-- To pass a new per-agent setting to pi (tools, extra flags), add a column, add it to `src/sql/agents/insert.sql` and `POST /api/companies/:id/agents`, and to `src/sql/agents/update.sql` and the column list in `PATCH /api/agents/:id`, then push the flag onto `args` in `start()` the way `model` is.
+- To change what every agent is told, edit `systemPrompt()` in `src/core/orchestrator.ts`. Keep its endpoint list in step with `routes`.
+- To pass a new per-agent setting to pi (tools, extra flags), add a column and the field on `Agent` in `src/core/types.ts`, add it to `src/db/sql/agents/insert.sql` and `POST /api/companies/:id/agents`, and to `src/db/sql/agents/update.sql` and the column list in `PATCH /api/agents/:id`, then push the flag onto `args` in `start()` the way `model` is.
 - Per-agent environment variables and secrets don't exist. A run gets the server's environment plus the `STAPLE_*` variables.
 - To run something other than pi, change the `args` in `start()` and the end-of-run parsing in its `close` handler, which reads pi's `agent_end` event. `test/fake-pi.ts` is the smallest program that ends a run as `succeeded` with a summary: read the `STAPLE_*` env, call the API, print one `{"type":"agent_end","messages":[...]}` line on stdout, exit 0.
